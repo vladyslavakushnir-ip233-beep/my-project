@@ -1,80 +1,113 @@
 package com.example;
-import javax.servlet.ServletException;
-import javax.servlet.annotation.WebServlet;
-import javax.servlet.http.Cookie;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpSession;
-import java.io.IOException;
-import java.io.PrintWriter;
 
-@WebServlet("/user")
+import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.WebServlet;
+import jakarta.servlet.http.*;
+import java.io.*;
+import java.sql.*;
+
+@WebServlet("/user/*")
 public class UserServlet extends HttpServlet {
 
-    // Метод GET: Обробка параметрів, сесій, куків та вивід HTML
     @Override
     protected void doGet(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
-        // 1. Обробка параметрів запиту (наприклад, ?name=Ivan&age=20)
-        String name = request.getParameter("name");
-        String age = request.getParameter("age");
-
-        if (name == null || name.isEmpty()) {
-            name = "Гість";
+        // PathVariable (/user/Іван)
+        String name = null;
+        String pathInfo = request.getPathInfo();
+        if (pathInfo != null && pathInfo.length() > 1) {
+            name = pathInfo.substring(1);
         }
 
-        // 2. Робота з сесіями (збереження імені користувача)
+        // RequestParam (?name=Іван)
+        if (name == null) name = request.getParameter("name");
+        if (name == null || name.isEmpty()) name = "Гість";
+
+        String age = request.getParameter("age");
+
+        // Сесія — зберігаємо дані
         HttpSession session = request.getSession();
         session.setAttribute("userName", name);
+        session.setAttribute("visitTime", System.currentTimeMillis());
 
-        // 3. Робота з куками (збереження останнього візиту)
-        Cookie visitCookie = new Cookie("lastVisit", "true");
-        visitCookie.setMaxAge(60 * 60 * 24); // 1 день
+        // Кука
+        Cookie visitCookie = new Cookie("lastVisit", name);
+        visitCookie.setMaxAge(60 * 60 * 24);
         response.addCookie(visitCookie);
 
-        // 4. Відправка відповіді у форматі HTML
         response.setContentType("text/html;charset=UTF-8");
         PrintWriter out = response.getWriter();
 
-        out.println("<html><head><title>Lab 1 - Servlets</title></head><body>");
-        out.println("<h1>Лабораторна робота №1</h1>");
+        out.println("<html><head><title>Журнал оцінок</title></head><body>");
+        out.println("<h1>Журнал оцінок студентів</h1>");
         out.println("<p>Привіт, <b>" + name + "</b>!</p>");
+        if (age != null) out.println("<p>Вік: " + age + "</p>");
+        out.println("<p>ID сесії: " + session.getId() + "</p>");
+        out.println("<p>Збережено в сесії: " + session.getAttribute("userName") + "</p>");
 
-        if (age != null) {
-            out.println("<p>Ваш вік: " + age + "</p>");
+        // Перевірка куки
+        Cookie[] cookies = request.getCookies();
+        if (cookies != null) {
+            for (Cookie c : cookies) {
+                if ("lastVisit".equals(c.getName())) {
+                    out.println("<p>Кука lastVisit: " + c.getValue() + "</p>");
+                }
+            }
         }
 
-        out.println("<p>Дані збережено в сесії. ID сесії: " + session.getId() + "</p>");
-        out.println("<hr>");
-        out.println("<form method='POST' action='user'>");
-        out.println("  <input type='text' name='message' placeholder='Введіть повідомлення для JSON'>");
-        out.println("  <button type='submit'>Відправити POST (JSON)</button>");
-        out.println("</form>");
+        out.println("<h3>Список студентів:</h3>");
+        out.println("<table border='1'><tr><th>ID</th><th>Ім'я</th><th>Група</th><th>Email</th></tr>");
+
+        try (Connection conn = DBConnection.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT * FROM students")) {
+            while (rs.next()) {
+                out.println("<tr><td>" + rs.getInt("id") + "</td>");
+                out.println("<td>" + rs.getString("name") + "</td>");
+                out.println("<td>" + rs.getString("group_name") + "</td>");
+                out.println("<td>" + rs.getString("email") + "</td></tr>");
+            }
+        } catch (SQLException e) {
+            out.println("<tr><td colspan='4'>Помилка: " + e.getMessage() + "</td></tr>");
+        }
+
+        out.println("</table><hr>");
+        out.println("<h3>Додати студента:</h3>");
+        out.println("<form method='POST' action='/servlet-app/user'>");
+        out.println("Ім'я: <input type='text' name='name'><br>");
+        out.println("Група: <input type='text' name='group_name'><br>");
+        out.println("Email: <input type='text' name='email'><br>");
+        out.println("<button type='submit'>Додати</button></form>");
+        out.println("<br><a href='/servlet-app/grades'>Переглянути оцінки</a>");
         out.println("</body></html>");
     }
 
-    // Метод POST: Відправка відповіді у форматі JSON
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response)
             throws ServletException, IOException {
 
-        // Отримання даних з форми
-        String message = request.getParameter("message");
-        if (message == null) message = "empty";
+        String name = request.getParameter("name");
+        String groupName = request.getParameter("group_name");
+        String email = request.getParameter("email");
 
-        // 5. Відправка відповіді у форматі JSON
+        String status;
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                 "INSERT INTO students (name, group_name, email) VALUES (?, ?, ?)")) {
+            ps.setString(1, name);
+            ps.setString(2, groupName);
+            ps.setString(3, email);
+            ps.executeUpdate();
+            status = "success";
+        } catch (SQLException e) {
+            status = "error: " + e.getMessage();
+        }
+
         response.setContentType("application/json");
         response.setCharacterEncoding("UTF-8");
         PrintWriter out = response.getWriter();
-        // Формуємо простий JSON вручну (якщо не використовуємо Jackson/Gson)
-        out.print("{");
-        out.print("\"status\": \"success\",");
-        out.print("\"receivedMessage\": \"" + message + "\",");
-        out.print("\"info\": \"Це відповідь у форматі JSON\"");
-        out.print("}");
+        out.print("{\"status\":\"" + status + "\",\"name\":\"" + name + "\",\"group\":\"" + groupName + "\"}");
         out.flush();
     }
 }
-
